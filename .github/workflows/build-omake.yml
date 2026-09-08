@@ -27,8 +27,10 @@ jobs:
 
       - name: Build package
         run: |
+          useradd -m builder
+          chown -R builder:builder omake
           cd omake
-          makepkg -s --noconfirm
+          su builder -c "makepkg -s --noconfirm"
 
       - name: Upload package
         uses: actions/upload-artifact@v4
