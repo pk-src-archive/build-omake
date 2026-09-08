@@ -9,33 +9,87 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     container:
       image: archlinux:latest
 
     steps:
-      - name: Install dependencies
+      - name: Pin Arch Linux to glibc 2.43 snapshot
         run: |
-          pacman -Syu --noconfirm
+          cat > /etc/pacman.d/mirrorlist <<'EOF'
+          Server=https://archive.archlinux.org/repos/2026/07/24/$repo/os/$arch
+          EOF
+
+          # Prevent pacman from replacing the snapshot with current packages.
+          sed -i 's/^SigLevel.*/SigLevel = Required DatabaseOptional/' /etc/pacman.conf
+
+          pacman -Syy
+
+      - name: Install build dependencies
+        run: |
           pacman -S --noconfirm \
             base-devel \
             git \
             ocaml
 
+      - name: Verify glibc
+        run: |
+          echo "=== glibc package ==="
+          pacman -Q glibc
+
+          echo
+          echo "=== glibc runtime ==="
+          ldd --version | head -n 1
+
+          echo
+          echo "=== GCC ==="
+          gcc --version | head -n 1
+
       - name: Checkout AUR package
         run: |
           git clone https://aur.archlinux.org/omake.git
-          cd omake
 
       - name: Build package
         run: |
           useradd -m builder
           chown -R builder:builder omake
+
           cd omake
-          su builder -c "makepkg -s --noconfirm"
+          su builder -c 'makepkg -s --noconfirm'
+
+      - name: Verify package
+        run: |
+          echo "=== Package ==="
+          ls -lh omake/*.pkg.tar.zst
+
+          echo
+          echo "=== Package contents ==="
+          bsdtar -tf omake/*.pkg.tar.zst | head -50
+
+      - name: Check GLIBC requirements
+        run: |
+          mkdir -p verify
+          bsdtar -xf omake/*.pkg.tar.zst -C verify
+
+          echo "=== GLIBC requirements ==="
+          readelf --version-info verify/usr/bin/omake \
+            | grep -o 'GLIBC_[0-9.]*' \
+            | sort -Vu
+
+          echo
+          echo "=== Checking for GLIBC_2.44 ==="
+
+          if readelf --version-info verify/usr/bin/omake \
+              | grep -q 'GLIBC_2.44'; then
+            echo "ERROR: omake requires GLIBC_2.44"
+            exit 1
+          fi
+
+          echo "OK: omake does not require GLIBC_2.44"
 
       - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          name: omake-package
+          name: omake-glibc-2.43
           path: omake/*.pkg.tar.zst
           if-no-files-found: error
